@@ -70,23 +70,50 @@ fn run() -> Result<(), WlError> {
     let conn = db::init(&db_path)?;
 
     if let Some(ref name) = cli.name {
-        let results = search::exact_lookup(&conn, name)?;
-        if results.is_empty() {
-            return Err(WlError::NotFound(name.clone()));
-        }
+        let mut results = search::exact_lookup(&conn, name)?;
 
-        if mode == OutputMode::Plain {
-            if results.len() == 1 {
+        if !results.is_empty() {
+            // Exact match logic
+            results.sort_by(|a, b| a.path.len().cmp(&b.path.len()).then(a.path.cmp(&b.path)));
+            if mode == OutputMode::Plain {
                 println!("{}", results[0].path);
-                process::exit(0);
-            } else {
-                for entry in &results {
-                    println!("{}", entry.path);
+                if results.len() > 1 && !cli.quiet {
+                    for entry in results.iter().skip(1) {
+                        eprintln!("note: also matches {}", entry.path);
+                    }
                 }
                 process::exit(0);
+            } else {
+                output::render_entries(&results, mode);
             }
         } else {
-            output::render_entries(&results, mode);
+            // Fuzzy fallback
+            let f_results = search::fuzzy_search(&conn, name)?;
+            if f_results.is_empty() {
+                eprintln!("Wordlist not found: {}", name);
+                process::exit(1);
+            }
+
+            let clear_winner = f_results.len() == 1
+                || (f_results[0].score > search::FUZZY_MIN_SCORE
+                    && (f_results[0].score - f_results[1].score) >= search::FUZZY_MIN_GAP);
+
+            if clear_winner {
+                println!("{}", f_results[0].path);
+                if !cli.quiet {
+                    eprintln!(
+                        "note: fuzzy match for '{}' -> {}",
+                        name, f_results[0].filename
+                    );
+                }
+                process::exit(0);
+            } else {
+                eprintln!("Wordlist not found: {} — closest matches:", name);
+                for entry in f_results.iter().take(5) {
+                    eprintln!("  {} ({})", entry.filename, entry.path);
+                }
+                process::exit(1);
+            }
         }
         return Ok(());
     }

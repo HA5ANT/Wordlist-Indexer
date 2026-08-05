@@ -4,6 +4,9 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use rusqlite::Connection;
 
+pub const FUZZY_MIN_SCORE: i64 = 50; // Need tuning
+pub const FUZZY_MIN_GAP: i64 = 20; // Need tuning
+
 #[derive(Debug, Clone)]
 pub struct FuzzyResult {
     pub score: i64,

@@ -58,13 +58,13 @@ fn test_integration_flow() {
     let output = run_cmd(&["index"]);
     assert!(output.status.success());
 
-    // 3. Exact search (wl rockyou)
+    // 3. Exact search (wl rockyou) - NEW BEHAVIOR: 1 path on stdout, note on stderr
     let output = run_cmd(&["rockyou"]);
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Since there are 2 duplicates, it should output both paths (one per line)
-    assert!(stdout.contains("wordlists/rockyou.txt"));
-    assert!(stdout.contains("wordlists2/rockyou.txt"));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stdout.lines().count(), 1);
+    assert!(stderr.contains("note: also matches"));
 
     // 4. Stats
     let output = run_cmd(&["stats"]);
