@@ -1,15 +1,20 @@
 mod cli;
 mod config;
 mod db;
+mod duplicates;
 mod error;
 mod indexer;
 mod output;
 mod search;
+mod stats;
+mod updater;
+mod verify;
 
 use clap::Parser;
 use cli::{Cli, Commands, ConfigSubcommands};
 use error::WlError;
 use output::OutputMode;
+use std::fs;
 use std::process;
 
 fn main() {
@@ -100,7 +105,7 @@ fn run() -> Result<(), WlError> {
                 }
                 config.repos.clone()
             };
-            indexer::index_all(&conn, &repos_to_scan, cli.quiet)?;
+            indexer::index_full(&conn, &repos_to_scan, cli.quiet)?;
         }
         Some(Commands::Ls { repo, ext }) => {
             let all = db::get_all(&conn)?;
@@ -189,7 +194,59 @@ fn run() -> Result<(), WlError> {
                         .map(|t| t.to_rfc3339())
                         .unwrap_or_else(|| "unknown".to_string());
                     println!("Last Modified: {}", dt);
+
+                    let sha256_str = entry.sha256.as_deref().unwrap_or("-");
+                    println!("SHA-256:       {}", sha256_str);
                 }
+            }
+        }
+        Some(Commands::Stats {
+            repo,
+            category,
+            largest,
+            extensions,
+        }) => {
+            stats::run_stats(&conn, repo, category, largest, extensions, mode)?;
+        }
+        Some(Commands::Duplicates {
+            name: _,
+            size,
+            hash,
+        }) => {
+            let dup_mode = if size {
+                duplicates::DupMode::Size
+            } else if hash {
+                duplicates::DupMode::Hash
+            } else {
+                duplicates::DupMode::Name
+            };
+            duplicates::run_duplicates(&conn, dup_mode, mode)?;
+        }
+        Some(Commands::Verify) => {
+            verify::run_verify(&conn)?;
+        }
+        Some(Commands::Update { path }) => {
+            let repos_to_scan = if let Some(p) = path {
+                vec![p]
+            } else {
+                if config.repos.is_empty() {
+                    return Err(WlError::NoReposConfigured);
+                }
+                config.repos.clone()
+            };
+            updater::update_incremental(&conn, &repos_to_scan, cli.quiet)?;
+        }
+        Some(Commands::RemoveMissing) => {
+            let all = db::get_all(&conn)?;
+            let mut removed = 0;
+            for entry in all {
+                if fs::metadata(&entry.path).is_err() {
+                    db::delete_entry(&conn, &entry.path)?;
+                    removed += 1;
+                }
+            }
+            if !cli.quiet {
+                println!("Removed {} stale entries.", removed);
             }
         }
         _ => {}

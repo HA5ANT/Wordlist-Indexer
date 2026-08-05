@@ -1,62 +1,19 @@
 use crate::db::{self, WordlistEntry};
 use crate::error::WlError;
+use crate::indexer::{
+    compute_sha256, count_lines_fast, get_valid_extension, is_compressed, is_hidden,
+};
 use chrono::Utc;
 use rusqlite::Connection;
-use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use walkdir::{DirEntry, WalkDir};
+use std::path::PathBuf;
+use walkdir::WalkDir;
 
-pub fn is_hidden(entry: &DirEntry) -> bool {
-    entry
-        .file_name()
-        .to_str()
-        .map(|s| s.starts_with('.'))
-        .unwrap_or(false)
-}
-
-pub fn get_valid_extension(path: &Path) -> Option<String> {
-    let ext = path.extension()?.to_str()?.to_lowercase();
-    match ext.as_str() {
-        "txt" | "lst" | "list" | "dict" | "wordlist" | "gz" | "zip" | "bz2" | "xz" => Some(ext),
-        _ => None,
-    }
-}
-
-pub fn is_compressed(ext: &str) -> bool {
-    matches!(ext, "gz" | "zip" | "tar" | "bz2" | "xz")
-}
-
-pub fn count_lines_fast(path: &Path) -> Option<i64> {
-    let mut file = fs::File::open(path).ok()?;
-    let mut buffer = [0; 64 * 1024];
-    let mut count = 0;
-    loop {
-        let n = file.read(&mut buffer).ok()?;
-        if n == 0 {
-            break;
-        }
-        count += buffer[..n].iter().filter(|&&b| b == b'\n').count() as i64;
-    }
-    Some(count)
-}
-
-pub fn compute_sha256(path: &Path) -> Result<String, WlError> {
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-pub fn index_full(conn: &Connection, repos: &[PathBuf], quiet: bool) -> Result<(), WlError> {
+pub fn update_incremental(
+    conn: &Connection,
+    repos: &[PathBuf],
+    quiet: bool,
+) -> Result<(), WlError> {
     let mut all_indexed_paths = Vec::new();
 
     for repo in repos {
@@ -77,6 +34,7 @@ pub fn index_full(conn: &Connection, repos: &[PathBuf], quiet: bool) -> Result<(
             .unwrap_or_else(|| "unknown".to_string());
 
         let mut added = 0;
+        let mut skipped_unchanged = 0;
         let mut skipped_large = 0;
 
         let walker = WalkDir::new(repo)
@@ -120,6 +78,18 @@ pub fn index_full(conn: &Connection, repos: &[PathBuf], quiet: bool) -> Result<(
             let path_str = path.to_string_lossy().into_owned();
             all_indexed_paths.push(path_str.clone());
 
+            // Check if mtime and size match in DB
+            if let Ok(Some(existing)) = db::get_entry_by_path(conn, &path_str) {
+                if existing.mtime == mtime
+                    && existing.size_bytes == size_bytes as i64
+                    && existing.sha256.is_some()
+                {
+                    skipped_unchanged += 1;
+                    continue;
+                }
+            }
+
+            // Otherwise, read and compute hash
             let sha256 = compute_sha256(path).ok();
 
             let filename = path
@@ -169,8 +139,8 @@ pub fn index_full(conn: &Connection, repos: &[PathBuf], quiet: bool) -> Result<(
 
         if !quiet {
             eprintln!(
-                "[+] {} added  |  0 skipped (unchanged)  |  {} skipped (too large)",
-                added, skipped_large
+                "[+] {} added  |  {} skipped (unchanged)  |  {} skipped (too large)",
+                added, skipped_unchanged, skipped_large
             );
         }
     }

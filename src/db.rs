@@ -18,6 +18,7 @@ pub struct WordlistEntry {
     pub line_count: Option<i64>,
     pub mtime: i64,
     pub last_indexed: i64,
+    pub sha256: Option<String>,
 }
 
 pub fn init(path: &Path) -> Result<Connection, WlError> {
@@ -45,6 +46,9 @@ pub fn init(path: &Path) -> Result<Connection, WlError> {
         [],
     )?;
 
+    // Auto-migrate schema
+    let _ = conn.execute("ALTER TABLE wordlists ADD COLUMN sha256 TEXT", []);
+
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_filename ON wordlists(filename);",
         [],
@@ -57,6 +61,18 @@ pub fn init(path: &Path) -> Result<Connection, WlError> {
         "CREATE INDEX IF NOT EXISTS idx_repo     ON wordlists(source_repo);",
         [],
     )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_category ON wordlists(category);",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_extension ON wordlists(extension);",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sha256 ON wordlists(sha256);",
+        [],
+    )?;
 
     Ok(conn)
 }
@@ -64,8 +80,8 @@ pub fn init(path: &Path) -> Result<Connection, WlError> {
 pub fn upsert(conn: &Connection, entry: &WordlistEntry) -> Result<(), WlError> {
     conn.execute(
         "INSERT OR REPLACE INTO wordlists (
-            filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed, sha256
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         (
             &entry.filename,
             &entry.stem,
@@ -78,6 +94,7 @@ pub fn upsert(conn: &Connection, entry: &WordlistEntry) -> Result<(), WlError> {
             entry.line_count,
             entry.mtime,
             entry.last_indexed,
+            &entry.sha256,
         ),
     )?;
     Ok(())
@@ -97,12 +114,13 @@ fn row_to_entry(row: &rusqlite::Row) -> SqliteResult<WordlistEntry> {
         line_count: row.get(9)?,
         mtime: row.get(10)?,
         last_indexed: row.get(11)?,
+        sha256: row.get(12)?,
     })
 }
 
 pub fn get_by_name(conn: &Connection, name: &str) -> Result<Vec<WordlistEntry>, WlError> {
     let mut stmt = conn.prepare(
-        "SELECT id, filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed
+        "SELECT id, filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed, sha256
          FROM wordlists
          WHERE LOWER(filename) = LOWER(?1) OR LOWER(stem) = LOWER(?1)
          ORDER BY path"
@@ -118,7 +136,7 @@ pub fn get_by_name(conn: &Connection, name: &str) -> Result<Vec<WordlistEntry>, 
 
 pub fn get_all(conn: &Connection) -> Result<Vec<WordlistEntry>, WlError> {
     let mut stmt = conn.prepare(
-        "SELECT id, filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed
+        "SELECT id, filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed, sha256
          FROM wordlists
          ORDER BY path"
     )?;
@@ -130,15 +148,23 @@ pub fn get_all(conn: &Connection) -> Result<Vec<WordlistEntry>, WlError> {
     Ok(results)
 }
 
-pub fn get_mtime(conn: &Connection, path: &str) -> Result<Option<i64>, WlError> {
-    let mut stmt = conn.prepare("SELECT mtime FROM wordlists WHERE path = ?1")?;
-    let mut rows = stmt.query([path])?;
-    if let Some(row) = rows.next()? {
-        let mtime: i64 = row.get(0)?;
-        Ok(Some(mtime))
+pub fn get_entry_by_path(conn: &Connection, path: &str) -> Result<Option<WordlistEntry>, WlError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed, sha256
+         FROM wordlists
+         WHERE path = ?1"
+    )?;
+    let mut rows = stmt.query_map([path], row_to_entry)?;
+    if let Some(row) = rows.next() {
+        Ok(Some(row?))
     } else {
         Ok(None)
     }
+}
+
+pub fn delete_entry(conn: &Connection, path: &str) -> Result<(), WlError> {
+    conn.execute("DELETE FROM wordlists WHERE path = ?1", [path])?;
+    Ok(())
 }
 
 pub fn delete_missing(conn: &Connection, existing_paths: &[String]) -> Result<(), WlError> {
