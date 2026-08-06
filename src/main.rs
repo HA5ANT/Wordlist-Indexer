@@ -7,6 +7,7 @@ mod indexer;
 mod output;
 mod search;
 mod stats;
+mod tagger;
 mod updater;
 mod verify;
 

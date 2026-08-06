@@ -1,5 +1,6 @@
 use crate::db::{self, WordlistEntry};
 use crate::error::WlError;
+use crate::tagger;
 use chrono::Utc;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -163,7 +164,9 @@ pub fn index_full(conn: &Connection, repos: &[PathBuf], quiet: bool) -> Result<(
                 sha256,
             };
 
-            db::upsert(conn, &db_entry)?;
+            let entry_id = db::upsert(conn, &db_entry)?;
+            let tags = tagger::get_tags_for_path(path);
+            db::set_tags_for_wordlist(conn, entry_id, &tags, false)?;
             added += 1;
         }
 

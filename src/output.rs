@@ -29,7 +29,6 @@ fn format_size(bytes: i64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = 1024.0 * 1024.0;
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-
     let b = bytes as f64;
     if b >= GB {
         format!("{:.1} GB", b / GB)
@@ -42,40 +41,84 @@ fn format_size(bytes: i64) -> String {
     }
 }
 
-fn print_table(headers: &[String], rows: &[Vec<String>]) {
+fn terminal_width() -> usize {
+    use terminal_size::{terminal_size, Width};
+    terminal_size()
+        .map(|(Width(w), _)| w as usize)
+        .unwrap_or(120)
+}
+fn truncate(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        s.to_string()
+    } else {
+        let cut: String = chars[..max.saturating_sub(1)].iter().collect();
+        format!("{}…", cut)
+    }
+}
+
+fn print_table(headers: &[String], rows: &[Vec<String>], col_caps: &[usize]) {
     if headers.is_empty() {
         return;
     }
     let num_cols = headers.len();
-    let mut col_widths = vec![0; num_cols];
+    let sep = 2usize;
+    let term_w = terminal_width();
 
-    for (i, h) in headers.iter().enumerate() {
-        col_widths[i] = h.len();
-    }
+    // Compute content-driven widths, capped per column
+    let mut col_widths: Vec<usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| h.len().min(col_caps[i]))
+        .collect();
 
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
-            if cell.len() > col_widths[i] {
-                col_widths[i] = cell.len();
+            let w = cell.len().min(col_caps[i]);
+            if w > col_widths[i] {
+                col_widths[i] = w;
             }
         }
     }
 
+    // Last column (PATH) gets whatever terminal space is left
+    let fixed: usize = col_widths[..num_cols - 1].iter().sum::<usize>() + sep * (num_cols - 1);
+    let path_w = term_w.saturating_sub(fixed + sep).max(20);
+    col_widths[num_cols - 1] = path_w;
+
+    // Header row
     for (i, h) in headers.iter().enumerate() {
         if i == num_cols - 1 {
             print!("{}", h);
         } else {
-            print!("{:<width$}  ", h, width = col_widths[i]);
+            print!("{:<width$}{}", h, " ".repeat(sep), width = col_widths[i]);
         }
     }
     println!();
 
+    // Separator line
+    for (i, &w) in col_widths.iter().enumerate() {
+        let total = if i == num_cols - 1 { w } else { w + sep };
+        print!("{}", "─".repeat(total));
+    }
+    println!();
+
+    // Data rows
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
+            let truncated = truncate(cell, col_widths[i]);
             if i == num_cols - 1 {
-                print!("{}", cell);
+                print!("{}", truncated);
             } else {
-                print!("{:<width$}  ", cell, width = col_widths[i]);
+                print!(
+                    "{:<width$}{}",
+                    truncated,
+                    " ".repeat(sep),
+                    width = col_widths[i]
+                );
             }
         }
         println!();
@@ -102,8 +145,8 @@ pub fn render_entries(entries: &[WordlistEntry], mode: OutputMode) {
                     size_bytes: e.size_bytes,
                 })
                 .collect();
-            if let Ok(json_str) = serde_json::to_string(&json_entries) {
-                println!("{}", json_str);
+            if let Ok(s) = serde_json::to_string_pretty(&json_entries) {
+                println!("{}", s);
             }
         }
         OutputMode::Table => {
@@ -114,17 +157,20 @@ pub fn render_entries(entries: &[WordlistEntry], mode: OutputMode) {
                 "CATEGORY".to_string(),
                 "PATH".to_string(),
             ];
-            let mut rows = Vec::new();
-            for entry in entries {
-                rows.push(vec![
-                    entry.filename.clone(),
-                    format_size(entry.size_bytes),
-                    entry.source_repo.clone().unwrap_or_else(|| ".".to_string()),
-                    entry.category.clone().unwrap_or_else(|| ".".to_string()),
-                    entry.path.clone(),
-                ]);
-            }
-            print_table(&headers, &rows);
+            let caps = [38, 9, 15, 32, usize::MAX];
+            let rows: Vec<Vec<String>> = entries
+                .iter()
+                .map(|e| {
+                    vec![
+                        e.filename.clone(),
+                        format_size(e.size_bytes),
+                        e.source_repo.clone().unwrap_or_else(|| ".".to_string()),
+                        e.category.clone().unwrap_or_else(|| ".".to_string()),
+                        e.path.clone(),
+                    ]
+                })
+                .collect();
+            print_table(&headers, &rows, &caps);
         }
     }
 }
@@ -146,8 +192,8 @@ pub fn render_fuzzy(results: &[FuzzyResult], mode: OutputMode) {
                     path: r.path.clone(),
                 })
                 .collect();
-            if let Ok(json_str) = serde_json::to_string(&json_entries) {
-                println!("{}", json_str);
+            if let Ok(s) = serde_json::to_string_pretty(&json_entries) {
+                println!("{}", s);
             }
         }
         OutputMode::Table => {
@@ -157,16 +203,19 @@ pub fn render_fuzzy(results: &[FuzzyResult], mode: OutputMode) {
                 "REPO".to_string(),
                 "PATH".to_string(),
             ];
-            let mut rows = Vec::new();
-            for r in results {
-                rows.push(vec![
-                    r.score.to_string(),
-                    r.filename.clone(),
-                    r.repo.clone(),
-                    r.path.clone(),
-                ]);
-            }
-            print_table(&headers, &rows);
+            let caps = [6, 38, 15, usize::MAX];
+            let rows: Vec<Vec<String>> = results
+                .iter()
+                .map(|r| {
+                    vec![
+                        r.score.to_string(),
+                        r.filename.clone(),
+                        r.repo.clone(),
+                        r.path.clone(),
+                    ]
+                })
+                .collect();
+            print_table(&headers, &rows, &caps);
         }
     }
 }

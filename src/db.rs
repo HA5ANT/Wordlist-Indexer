@@ -28,26 +28,77 @@ pub fn init(path: &Path) -> Result<Connection, WlError> {
 
     let conn = Connection::open(path)?;
 
+    // Initialize migration table
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS wordlists (
-          id           INTEGER PRIMARY KEY,
-          filename     TEXT NOT NULL,
-          stem         TEXT NOT NULL,
-          path         TEXT NOT NULL UNIQUE,
-          extension    TEXT,
-          size_bytes   INTEGER,
-          source_repo  TEXT,
-          category     TEXT,
-          compressed   BOOLEAN DEFAULT 0,
-          line_count   INTEGER,
-          mtime        INTEGER,
-          last_indexed INTEGER
+        "CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY
         );",
         [],
     )?;
 
-    // Auto-migrate schema
-    let _ = conn.execute("ALTER TABLE wordlists ADD COLUMN sha256 TEXT", []);
+    // Get current version
+    let current_version: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    // Run migrations
+    if current_version < 1 {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS wordlists (
+              id           INTEGER PRIMARY KEY,
+              filename     TEXT NOT NULL,
+              stem         TEXT NOT NULL,
+              path         TEXT NOT NULL UNIQUE,
+              extension    TEXT,
+              size_bytes   INTEGER,
+              source_repo  TEXT,
+              category     TEXT,
+              compressed   BOOLEAN DEFAULT 0,
+              line_count   INTEGER,
+              mtime        INTEGER,
+              last_indexed INTEGER
+            );",
+            [],
+        )?;
+
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
+    }
+
+    if current_version < 2 {
+        let _ = conn.execute("ALTER TABLE wordlists ADD COLUMN sha256 TEXT", []);
+        conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
+    }
+
+    if current_version < 3 {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL
+            );",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS wordlist_tags (
+                wordlist_id INTEGER REFERENCES wordlists(id) ON DELETE CASCADE,
+                tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (wordlist_id, tag_id)
+            );",
+            [],
+        )?;
+        conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+    }
+
+    if current_version < 4 {
+        conn.execute(
+            "ALTER TABLE wordlist_tags ADD COLUMN is_manual BOOLEAN DEFAULT 0",
+            [],
+        )?;
+        conn.execute("INSERT INTO schema_version (version) VALUES (4)", [])?;
+    }
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_filename ON wordlists(filename);",
@@ -77,7 +128,7 @@ pub fn init(path: &Path) -> Result<Connection, WlError> {
     Ok(conn)
 }
 
-pub fn upsert(conn: &Connection, entry: &WordlistEntry) -> Result<(), WlError> {
+pub fn upsert(conn: &Connection, entry: &WordlistEntry) -> Result<i64, WlError> {
     conn.execute(
         "INSERT OR REPLACE INTO wordlists (
             filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed, sha256
@@ -97,6 +148,35 @@ pub fn upsert(conn: &Connection, entry: &WordlistEntry) -> Result<(), WlError> {
             &entry.sha256,
         ),
     )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn set_tags_for_wordlist(
+    conn: &Connection,
+    wordlist_id: i64,
+    tags: &[String],
+    is_manual: bool,
+) -> Result<(), WlError> {
+    for tag in tags {
+        conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag])?;
+    }
+
+    if !is_manual {
+        conn.execute(
+            "DELETE FROM wordlist_tags WHERE wordlist_id = ?1 AND is_manual = 0",
+            [wordlist_id],
+        )?;
+    }
+
+    for tag in tags {
+        let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| {
+            row.get(0)
+        })?;
+        conn.execute(
+            "INSERT OR REPLACE INTO wordlist_tags (wordlist_id, tag_id, is_manual) VALUES (?1, ?2, ?3)", 
+            (wordlist_id, tag_id, if is_manual { 1 } else { 0 })
+        )?;
+    }
     Ok(())
 }
 
