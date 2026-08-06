@@ -151,17 +151,19 @@ pub fn render_entries(entries: &[WordlistEntry], mode: OutputMode) {
         }
         OutputMode::Table => {
             let headers = vec![
+                "ID".to_string(),
                 "FILENAME".to_string(),
                 "SIZE".to_string(),
                 "REPO".to_string(),
                 "CATEGORY".to_string(),
                 "PATH".to_string(),
             ];
-            let caps = [38, 9, 15, 32, usize::MAX];
+            let caps = [6, 38, 9, 15, 32, usize::MAX];
             let rows: Vec<Vec<String>> = entries
                 .iter()
                 .map(|e| {
                     vec![
+                        e.id.unwrap_or(0).to_string(),
                         e.filename.clone(),
                         format_size(e.size_bytes),
                         e.source_repo.clone().unwrap_or_else(|| ".".to_string()),

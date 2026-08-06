@@ -12,7 +12,7 @@ mod updater;
 mod verify;
 
 use clap::Parser;
-use cli::{Cli, Commands, ConfigSubcommands};
+use cli::{Cli, Commands, ConfigSubcommands, TagSubcommands};
 use error::WlError;
 use output::OutputMode;
 use std::fs;
@@ -120,9 +120,20 @@ fn run() -> Result<(), WlError> {
     }
 
     match cli.command {
-        Some(Commands::Search { query }) => {
+        Some(Commands::Search { query, tag }) => {
             let results = search::fuzzy_search(&conn, &query)?;
-            output::render_fuzzy(&results, mode);
+            let filtered = if let Some(tags) = tag {
+                results
+                    .into_iter()
+                    .filter(|e| {
+                        let entry_tags = db::get_tags_for_wordlist(&conn, e.id).unwrap_or_default();
+                        tags.iter().any(|t| entry_tags.contains(t))
+                    })
+                    .collect()
+            } else {
+                results
+            };
+            output::render_fuzzy(&filtered, mode);
         }
         Some(Commands::Index { path }) => {
             let repos_to_scan = if let Some(p) = path {
@@ -135,7 +146,7 @@ fn run() -> Result<(), WlError> {
             };
             indexer::index_full(&conn, &repos_to_scan, cli.quiet)?;
         }
-        Some(Commands::Ls { repo, ext }) => {
+        Some(Commands::Ls { repo, ext, tag }) => {
             let all = db::get_all(&conn)?;
             let filtered: Vec<db::WordlistEntry> = all
                 .into_iter()
@@ -158,11 +169,32 @@ fn run() -> Result<(), WlError> {
                             return false;
                         }
                     }
+                    if let Some(ref tags) = tag {
+                        let entry_tags =
+                            db::get_tags_for_wordlist(&conn, e.id.unwrap_or(0)).unwrap_or_default();
+                        if !tags.iter().any(|t| entry_tags.contains(t)) {
+                            return false;
+                        }
+                    }
                     true
                 })
                 .collect();
             output::render_entries(&filtered, mode);
         }
+        Some(Commands::Tag { action }) => match action {
+            TagSubcommands::Add { id, tag } => {
+                db::add_tag_to_wordlist(&conn, id, &tag)?;
+                if !cli.quiet {
+                    eprintln!("[+] Tag '{}' added to entry {}", tag, id);
+                }
+            }
+            TagSubcommands::Rm { id, tag } => {
+                db::remove_tag_from_wordlist(&conn, id, &tag)?;
+                if !cli.quiet {
+                    eprintln!("[-] Tag '{}' removed from entry {}", tag, id);
+                }
+            }
+        },
         Some(Commands::Info { name }) => {
             let results = search::exact_lookup(&conn, &name)?;
             if results.is_empty() {
@@ -175,6 +207,7 @@ fn run() -> Result<(), WlError> {
                     if idx > 0 {
                         println!();
                     }
+                    println!("ID:            {}", entry.id.unwrap_or(0));
                     println!("Filename:      {}", entry.filename);
                     println!("Stem:          {}", entry.stem);
                     println!("Path:          {}", entry.path);
@@ -211,6 +244,9 @@ fn run() -> Result<(), WlError> {
                         "Compressed:    {}",
                         if entry.compressed { "Yes" } else { "No" }
                     );
+
+                    let tags = db::get_tags_for_wordlist(&conn, entry.id.unwrap_or(0))?;
+                    println!("Tags:          {}", tags.join(", "));
 
                     let line_count_str = entry
                         .line_count

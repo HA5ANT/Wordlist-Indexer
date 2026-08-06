@@ -19,12 +19,14 @@ A production-ready local search engine and metadata indexer for wordlists. Desig
 | `wl <name>`                  | Exact lookup — print path(s)         |
 | `wl search <query>`          | Fuzzy search                         |
 | `wl index`                   | Full rebuild of the index            |
-| `wl update`                  | Incremental update (skip unchanged)  |
+| `wl update`                  | Incremental update (preserves manual tags) |
 | `wl stats`                   | Collection statistics                |
 | `wl duplicates`              | Find duplicate wordlists             |
+| `wl tag add <id> <tag>`      | Manually add a tag to an entry       |
+| `wl tag rm <id> <tag>`       | Remove a tag from an entry           |
 | `wl verify`                  | Verify index integrity               |
 | `wl remove-missing`          | Remove stale entries from index      |
-| `wl info <name>`             | Show full metadata                   |
+| `wl info <name>`             | Show full metadata (includes tags)   |
 | `wl ls`                      | Browse indexed wordlists             |
 | `wl config add-repo <path>`  | Add a repository to scan             |
 | `wl config remove-repo <p>`  | Remove a repository                  |
@@ -59,6 +61,9 @@ Installing:      0.2.0
 
 Update complete.
 ```
+Schema upgrades are handled by the application itself: on first run after an update, `wl` detects the
+database version, applies additive migrations, and backs up the database to `index.db.bak` before any
+change — no manual migration steps required.
 
 ### Uninstall
 Completely remove `wl`, its completions, and (optionally) its config and database:
@@ -122,7 +127,8 @@ wl index
 ```
 
 ### 3. Incremental Update
-Scan repos incrementally — skip unchanged files, insert new ones, remove deleted ones:
+Scan repos incrementally — skip unchanged files, insert new ones, remove deleted ones. Manual tags
+added via `wl tag add` are preserved, even for files that were modified:
 ```bash
 wl update
 ```
@@ -200,30 +206,30 @@ wl remove-missing
 wl ls                         # All indexed wordlists
 wl ls --repo wordlists        # Filter by repository name
 wl ls --ext txt               # Filter by extension
+wl ls --tag web,fuzzing       # Filter by tags (OR logic: entries with ANY of the specified tags)
 wl ls --table                 # Table format
 wl ls --json                  # JSON output
 ```
 
-### 11. View Full Metadata
+### 11. View Full Metadata & Tags
 ```bash
 wl info rockyou
-```
-Example output:
-```
-Filename:      rockyou.txt
-Stem:          rockyou
-Path:          /usr/share/wordlists/rockyou.txt
-Extension:     txt
-Size:          133.4 MB (139921507 bytes)
-Repository:    wordlists
-Category:      .
-Compressed:    No
-Line Count:    14344391
-Last Modified: 2021-09-01T12:00:00+00:00
-SHA-256:       00e4...
+# Output now includes a "Tags: ..." line
 ```
 
-### 12. Global Flags
+### 12. Tag Management
+```bash
+# Find entry ID from `wl info` or `wl ls --table`
+wl tag add 123 custom-tag
+wl tag rm 123 custom-tag
+```
+
+### 13. Advanced Fuzzy Search with Tags
+```bash
+wl search raft --tag webcontent
+```
+
+### 14. Global Flags
 All commands support:
 - `--json`: Output as raw JSON
 - `--table`: Output as aligned table

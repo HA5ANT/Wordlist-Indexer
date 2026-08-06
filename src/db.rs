@@ -1,5 +1,5 @@
 use crate::error::WlError;
-use rusqlite::{Connection, Result as SqliteResult};
+use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -134,9 +134,21 @@ pub fn init(path: &Path) -> Result<Connection, WlError> {
 
 pub fn upsert(conn: &Connection, entry: &WordlistEntry) -> Result<i64, WlError> {
     conn.execute(
-        "INSERT OR REPLACE INTO wordlists (
+        "INSERT INTO wordlists (
             filename, stem, path, extension, size_bytes, source_repo, category, compressed, line_count, mtime, last_indexed, sha256
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        ON CONFLICT(path) DO UPDATE SET
+            filename     = excluded.filename,
+            stem         = excluded.stem,
+            extension    = excluded.extension,
+            size_bytes   = excluded.size_bytes,
+            source_repo  = excluded.source_repo,
+            category     = excluded.category,
+            compressed   = excluded.compressed,
+            line_count   = excluded.line_count,
+            mtime        = excluded.mtime,
+            last_indexed = excluded.last_indexed,
+            sha256       = excluded.sha256",
         (
             &entry.filename,
             &entry.stem,
@@ -152,7 +164,12 @@ pub fn upsert(conn: &Connection, entry: &WordlistEntry) -> Result<i64, WlError> 
             &entry.sha256,
         ),
     )?;
-    Ok(conn.last_insert_rowid())
+    let id: i64 = conn.query_row(
+        "SELECT id FROM wordlists WHERE path = ?1",
+        [&entry.path],
+        |row| row.get(0),
+    )?;
+    Ok(id)
 }
 
 pub fn set_tags_for_wordlist(
@@ -176,10 +193,18 @@ pub fn set_tags_for_wordlist(
         let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| {
             row.get(0)
         })?;
-        conn.execute(
-            "INSERT OR REPLACE INTO wordlist_tags (wordlist_id, tag_id, is_manual) VALUES (?1, ?2, ?3)", 
-            (wordlist_id, tag_id, if is_manual { 1 } else { 0 })
-        )?;
+        if is_manual {
+            conn.execute(
+                "INSERT INTO wordlist_tags (wordlist_id, tag_id, is_manual) VALUES (?1, ?2, 1)
+                 ON CONFLICT(wordlist_id, tag_id) DO UPDATE SET is_manual = 1",
+                (wordlist_id, tag_id),
+            )?;
+        } else {
+            conn.execute(
+                "INSERT OR IGNORE INTO wordlist_tags (wordlist_id, tag_id, is_manual) VALUES (?1, ?2, 0)",
+                (wordlist_id, tag_id),
+            )?;
+        }
     }
     Ok(())
 }
@@ -196,17 +221,33 @@ pub fn get_tags_for_wordlist(conn: &Connection, wordlist_id: i64) -> Result<Vec<
 
 pub fn add_tag_to_wordlist(conn: &Connection, wordlist_id: i64, tag: &str) -> Result<(), WlError> {
     conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag])?;
-    let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| row.get(0))?;
+    let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| {
+        row.get(0)
+    })?;
     conn.execute(
-        "INSERT OR REPLACE INTO wordlist_tags (wordlist_id, tag_id, is_manual) VALUES (?1, ?2, 1)", 
-        (wordlist_id, tag_id)
+        "INSERT INTO wordlist_tags (wordlist_id, tag_id, is_manual) VALUES (?1, ?2, 1)
+         ON CONFLICT(wordlist_id, tag_id) DO UPDATE SET is_manual = 1",
+        (wordlist_id, tag_id),
     )?;
     Ok(())
 }
 
-pub fn remove_tag_from_wordlist(conn: &Connection, wordlist_id: i64, tag: &str) -> Result<(), WlError> {
-    let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| row.get(0))?;
-    conn.execute("DELETE FROM wordlist_tags WHERE wordlist_id = ?1 AND tag_id = ?2", (wordlist_id, tag_id))?;
+pub fn remove_tag_from_wordlist(
+    conn: &Connection,
+    wordlist_id: i64,
+    tag: &str,
+) -> Result<(), WlError> {
+    let tag_id: Option<i64> = conn
+        .query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    if let Some(tag_id) = tag_id {
+        conn.execute(
+            "DELETE FROM wordlist_tags WHERE wordlist_id = ?1 AND tag_id = ?2",
+            (wordlist_id, tag_id),
+        )?;
+    }
     Ok(())
 }
 

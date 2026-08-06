@@ -68,24 +68,6 @@ pub enum Commands {
         /// Name of the wordlist
         name: String,
     },
-...
-#[derive(Subcommand, Debug)]
-pub enum TagSubcommands {
-    /// Add a tag to an entry
-    Add {
-        /// Database ID of the entry
-        id: i64,
-        /// Tag to add
-        tag: String,
-    },
-    /// Remove a tag from an entry
-    Rm {
-        /// Database ID of the entry
-        id: i64,
-        /// Tag to remove
-        tag: String,
-    },
-}
     /// Configuration management
     Config {
         #[command(subcommand)]
@@ -133,6 +115,24 @@ pub enum TagSubcommands {
     },
     /// Clean stale entries for missing files in the filesystem
     RemoveMissing,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TagSubcommands {
+    /// Add a tag to an entry
+    Add {
+        /// Database ID of the entry
+        id: i64,
+        /// Tag to add
+        tag: String,
+    },
+    /// Remove a tag from an entry
+    Rm {
+        /// Database ID of the entry
+        id: i64,
+        /// Tag to remove
+        tag: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

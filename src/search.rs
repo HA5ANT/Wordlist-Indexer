@@ -9,6 +9,7 @@ pub const FUZZY_MIN_GAP: i64 = 20; // Need tuning
 
 #[derive(Debug, Clone)]
 pub struct FuzzyResult {
+    pub id: i64,
     pub score: i64,
     pub filename: String,
     pub repo: String,
@@ -29,6 +30,7 @@ pub fn fuzzy_search(conn: &Connection, query: &str) -> Result<Vec<FuzzyResult>, 
             matcher
                 .fuzzy_match(&entry.filename, query)
                 .map(|score| FuzzyResult {
+                    id: entry.id.unwrap_or(0),
                     score,
                     filename: entry.filename,
                     repo: entry.source_repo.unwrap_or_else(|| "unknown".to_string()),

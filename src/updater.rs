@@ -85,6 +85,10 @@ pub fn update_incremental(
                     && existing.size_bytes == size_bytes as i64
                     && existing.sha256.is_some()
                 {
+                    let tags = tagger::get_tags_for_path(path);
+                    if let Some(id) = existing.id {
+                        db::set_tags_for_wordlist(conn, id, &tags, false)?;
+                    }
                     skipped_unchanged += 1;
                     continue;
                 }
