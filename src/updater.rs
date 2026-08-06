@@ -3,6 +3,7 @@ use crate::error::WlError;
 use crate::indexer::{
     compute_sha256, count_lines_fast, get_valid_extension, is_compressed, is_hidden,
 };
+use crate::tagger;
 use chrono::Utc;
 use rusqlite::Connection;
 use std::fs;
@@ -133,7 +134,9 @@ pub fn update_incremental(
                 sha256,
             };
 
-            db::upsert(conn, &db_entry)?;
+            let entry_id = db::upsert(conn, &db_entry)?;
+            let tags = tagger::get_tags_for_path(path);
+            db::set_tags_for_wordlist(conn, entry_id, &tags, false)?;
             added += 1;
         }
 

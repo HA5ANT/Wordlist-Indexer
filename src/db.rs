@@ -26,6 +26,10 @@ pub fn init(path: &Path) -> Result<Connection, WlError> {
         fs::create_dir_all(parent)?;
     }
 
+    if path.exists() {
+        fs::copy(path, path.with_extension("db.bak"))?;
+    }
+
     let conn = Connection::open(path)?;
 
     // Initialize migration table
@@ -177,6 +181,32 @@ pub fn set_tags_for_wordlist(
             (wordlist_id, tag_id, if is_manual { 1 } else { 0 })
         )?;
     }
+    Ok(())
+}
+
+pub fn get_tags_for_wordlist(conn: &Connection, wordlist_id: i64) -> Result<Vec<String>, WlError> {
+    let mut stmt = conn.prepare("SELECT t.name FROM tags t JOIN wordlist_tags wt ON t.id = wt.tag_id WHERE wt.wordlist_id = ?1")?;
+    let rows = stmt.query_map([wordlist_id], |row| row.get(0))?;
+    let mut tags = Vec::new();
+    for row in rows {
+        tags.push(row?);
+    }
+    Ok(tags)
+}
+
+pub fn add_tag_to_wordlist(conn: &Connection, wordlist_id: i64, tag: &str) -> Result<(), WlError> {
+    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag])?;
+    let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| row.get(0))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO wordlist_tags (wordlist_id, tag_id, is_manual) VALUES (?1, ?2, 1)", 
+        (wordlist_id, tag_id)
+    )?;
+    Ok(())
+}
+
+pub fn remove_tag_from_wordlist(conn: &Connection, wordlist_id: i64, tag: &str) -> Result<(), WlError> {
+    let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = ?1", [tag], |row| row.get(0))?;
+    conn.execute("DELETE FROM wordlist_tags WHERE wordlist_id = ?1 AND tag_id = ?2", (wordlist_id, tag_id))?;
     Ok(())
 }
 

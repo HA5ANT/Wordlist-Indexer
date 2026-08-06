@@ -35,6 +35,9 @@ pub enum Commands {
     Search {
         /// Query to search for
         query: String,
+        /// Filter by tags (can specify multiple)
+        #[arg(long, value_delimiter = ',')]
+        tag: Option<Vec<String>>,
     },
     /// Scan and perform a full index of wordlists (clean rebuild)
     Index {
@@ -51,12 +54,38 @@ pub enum Commands {
         /// Filter by file extension
         #[arg(long)]
         ext: Option<String>,
+        /// Filter by tags (can specify multiple)
+        #[arg(long, value_delimiter = ',')]
+        tag: Option<Vec<String>>,
+    },
+    /// Manage tags on wordlist entries
+    Tag {
+        #[command(subcommand)]
+        action: TagSubcommands,
     },
     /// Display full metadata for a wordlist
     Info {
         /// Name of the wordlist
         name: String,
     },
+...
+#[derive(Subcommand, Debug)]
+pub enum TagSubcommands {
+    /// Add a tag to an entry
+    Add {
+        /// Database ID of the entry
+        id: i64,
+        /// Tag to add
+        tag: String,
+    },
+    /// Remove a tag from an entry
+    Rm {
+        /// Database ID of the entry
+        id: i64,
+        /// Tag to remove
+        tag: String,
+    },
+}
     /// Configuration management
     Config {
         #[command(subcommand)]
